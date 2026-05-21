@@ -50,6 +50,7 @@ playwright/.cache/
 
 # browser profiles (cookies + auth tokens at rest — never commit)
 .browser-profiles/
+.mosaiq-profiles/
 
 # windsurf / cursor
 .windsurf/

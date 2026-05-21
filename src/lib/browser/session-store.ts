@@ -20,7 +20,7 @@ export interface UpsertBrowserSessionInput {
   platform: string
   storageState: BrowserStorageState
   accountLabel?: string | null
-  runtime: 'local' | 'browserbase'
+  runtime: 'local' | 'browserbase' | 'mosaiq'
   fingerprint?: Record<string, unknown>
   expiresAt?: Date | null
 }

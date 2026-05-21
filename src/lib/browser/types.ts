@@ -9,7 +9,7 @@
  */
 import type { Page } from 'playwright'
 
-export type BrowserRuntimeKind = 'local' | 'browserbase'
+export type BrowserRuntimeKind = 'local' | 'browserbase' | 'mosaiq'
 
 /**
  * Playwright `storageState` shape — cookies + per-origin localStorage.
