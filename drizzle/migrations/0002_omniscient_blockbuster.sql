@@ -1,0 +1,1 @@
+ALTER TABLE "browser_sessions" ADD COLUMN "account_state" jsonb;

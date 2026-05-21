@@ -1,0 +1,9 @@
+{
+  "audience": "Heavy users of AI chat tools (ChatGPT, Claude, Gemini, Copilot) who are frustrated by repeating the same context every new session and want their AI to remember preferences, ongoing projects, writing style, and personal facts across conversations and tools. Roles: software engineers building with AI, technical writers, founders using AI for ideation and ops, indie hackers, researchers, students, knowledge workers who treat AI as their thinking partner, AI-curious power users who try every new model. They care about: 1) productivity (no more re-explaining who they are or what they're working on), 2) coherent long-running projects with AI, 3) some privacy / control over what the extension remembers and where it lives. Comfortable installing browser extensions; tech-forward; English-language primary. Discovery channels: Hacker News, Twitter/X AI cluster (Karpathy/Simon Willison/swyx adjacent), Reddit (r/ChatGPT, r/ClaudeAI, r/LocalLLaMA, r/singularity, r/OpenAI, r/artificial), Product Hunt for launch buzz, Indie Hackers / build-in-public threads, AI newsletters (Ben's Bites, TLDR AI, Latent Space), productivity bloggers.",
+  "product": {
+    "name": "Rethread",
+    "oneLiner": "AI context memory Chrome extension — your AI never forgets who you are, across ChatGPT / Claude / Gemini sessions.",
+    "url": "https://rethread.dev",
+    "type": "chrome_extension"
+  }
+}

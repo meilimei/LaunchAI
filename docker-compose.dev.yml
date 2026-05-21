@@ -1,0 +1,45 @@
+# ============================================================
+# Local development infrastructure for LaunchAI.
+# Starts: Postgres 16, Redis 7
+#
+#   pnpm docker:up    -> start
+#   pnpm docker:down  -> stop
+#   pnpm docker:logs  -> follow logs
+# ============================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: launchai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: launchai
+      POSTGRES_PASSWORD: launchai
+      POSTGRES_DB: launchai
+    ports:
+      - '5432:5432'
+    volumes:
+      - launchai-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U launchai -d launchai']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: launchai-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - launchai-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  launchai-postgres-data:
+  launchai-redis-data:

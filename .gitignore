@@ -1,0 +1,66 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# testing
+coverage
+
+# next.js
+.next/
+out/
+build
+dist
+
+# production
+*.log
+*.tsbuildinfo
+next-env.d.ts
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env
+.env*.local
+.env.development
+.env.production
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+
+# editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+# browser profiles (cookies + auth tokens at rest — never commit)
+.browser-profiles/
+
+# windsurf / cursor
+.windsurf/
+.cursor/
+
+# drizzle
+drizzle/.snapshots
+*.db
+*.sqlite
+
+# misc
+.cache
+.turbo
+tmp/

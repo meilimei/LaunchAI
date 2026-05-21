@@ -1,0 +1,9 @@
+{
+  "campaignId": "dev-warmup",
+  "productName": "docMask",
+  "productOneLiner": "redact PII from screenshots before you share them",
+  "productUrl": "https://docmask.app",
+  "topic": "Chrome extensions for productivity and privacy",
+  "avatarUrl": "https://docmask.app/icon-512.png",
+  "displayName": "docMask"
+}

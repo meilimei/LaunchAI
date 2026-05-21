@@ -1,0 +1,9 @@
+{
+  "audience": "Knowledge workers who use AI chat tools (ChatGPT, Claude, Gemini, Copilot) for daily work and need to feed Word / Excel / PDF documents into them without leaking PII (client names, financials, contracts, medical info, employee records, internal memos). Includes: consultants, lawyers, accountants, HR, healthcare admin, founders, PMs, marketers, executives, anyone in regulated industries plus AI-aware tech-forward users in privacy-conscious roles. Concerns: data being absorbed into OpenAI/Anthropic training corpora, accidental leaks in shared chat threads, compliance (HIPAA, GDPR, attorney-client privilege), wanting reversible redaction so they can restore the originals. Tech-forward enough to use AI daily but not necessarily developers. Discovery channels: Google searches like 'redact PDF before chatgpt' / 'remove names before claude', AI / privacy / productivity newsletters, Reddit (r/ChatGPT, r/ClaudeAI, r/privacy, r/sysadmin, r/Lawyers, r/legaltech), peer recommendations on LinkedIn, Twitter/X AI/privacy clusters, Hacker News for the technical privacy-minded subset.",
+  "product": {
+    "name": "docMask",
+    "oneLiner": "Redact Word, Excel, and PDF locally before AI sees them — file never leaves your machine, fully reversible, $39 one-time.",
+    "url": "https://docmask.app",
+    "type": "desktop_app"
+  }
+}
