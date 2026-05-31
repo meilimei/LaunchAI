@@ -8,7 +8,7 @@
  * Browserbase or any other CDP-style provider.
  *
  * Activation:
- *   - link `@mosaiq/cloud-sdk` and `@mosaiq/persona-schema` (pnpm link until
+ *   - link `@runova/cloud-sdk` and `@runova/persona-schema` (pnpm link until
  *     they publish to npm)
  *   - set MOSAIQ_API_URL / MOSAIQ_API_KEY / MOSAIQ_PROJECT_ID in .env.local
  *   - set MOSAIQ_DEFAULT_PERSONA_ID to a persona that has already been
@@ -25,9 +25,10 @@
  *     `BrowserContext` parameter is only used at type-time (erased) and at
  *     runtime we pass our `playwright` BrowserContext through — Playwright's
  *     core type lines up structurally.
- *   - `session.injectInto(ctx)` MUST be called before the first `page.goto`
- *     in the context. Otherwise the first frame loads with raw Chromium
- *     fingerprint and any platform anti-bot sees the unmasked navigator.
+ *   - v0.11+ pod applies server-side `injectAll` by default (Option A), so
+ *     bare `connectOverCDP` already deep-spoofs before any client call.
+ *   - `session.injectInto(ctx)` remains idempotent belt-and-suspenders; call
+ *     it before the first real `page.goto` when not using `about:blank` only.
  *   - We restore LaunchAI's BrowserStorageState into cookies only. The
  *     browser-pod also keeps a user-data-dir on its volume which holds
  *     IndexedDB / Service Workers; that's pod-side persistence and is
@@ -36,9 +37,11 @@
 import { chromium, type BrowserContext, type Page } from 'playwright'
 import { nanoid } from 'nanoid'
 
-import { MosaiqCloudClient, type ManagedCloudSession } from '@mosaiq/cloud-sdk'
+import { MosaiqCloudClient, type ManagedCloudSession } from '@runova/cloud-sdk'
 
 import type { BrowserRuntime, ManagedBrowser, StartSessionInput } from './types'
+
+const KEEPALIVE_TTL_SECONDS = 86_400 // 24h — matches Mosaiq SESSION_TTL_MAX_KEEPALIVE_SECONDS default
 
 const REQUIRED_ENV = ['MOSAIQ_API_URL', 'MOSAIQ_API_KEY', 'MOSAIQ_PROJECT_ID'] as const
 function readEnv() {
@@ -55,7 +58,9 @@ function readEnv() {
 let cachedClient: MosaiqCloudClient | null = null
 function getClient(): MosaiqCloudClient {
   if (cachedClient) return cachedClient
-  cachedClient = new MosaiqCloudClient(readEnv())
+  const env = readEnv()
+  const requestTimeoutMs = Number(process.env.MOSAIQ_REQUEST_TIMEOUT_MS ?? '180000')
+  cachedClient = new MosaiqCloudClient({ ...env, requestTimeoutMs })
   return cachedClient
 }
 
@@ -84,13 +89,15 @@ export const mosaiqCloudRuntime: BrowserRuntime = {
   async startSession(input: StartSessionInput): Promise<ManagedBrowser> {
     const client = getClient()
     const personaId = await resolvePersonaIdForUser(input.userId)
+    const stickyKey = `launchai:${input.userId}:${input.platform}`
 
-    const sess: ManagedCloudSession = await client.createSession({
+    const sess: ManagedCloudSession = await client.createSessionOrRejoin({
       persona: { id: personaId },
       // headful makes no sense for a cloud pod — it always renders headless.
-      // We carry input.headful through only for symmetry with the local runtime.
       stealth: { inject: true, humanize: true, rebrowserPatches: true },
-      ttlSeconds: 1800,
+      keepAlive: true,
+      userMetadata: { stickyKey },
+      ttlSeconds: KEEPALIVE_TTL_SECONDS,
       clientLabel: `launchai:${input.userId}:${input.platform}`,
     })
 
@@ -111,17 +118,14 @@ export const mosaiqCloudRuntime: BrowserRuntime = {
     // we reuse it so storageState and persona injection live on the same one.
     const ctx: BrowserContext = browser.contexts()[0] ?? (await browser.newContext())
 
-    // PRIORITY: persona injection MUST come before any goto, otherwise the
-    // first frame loads with raw chromium navigator/screen.
-    // @mosaiq/cloud-sdk's BrowserContext type comes from playwright-core but
-    // is structurally compatible with the playwright BrowserContext we hold.
+    // Belt-and-suspenders: server-side injectAll (Option A) already deep-spoofs
+    // before first navigation; injectInto remains idempotent if called again.
     await sess.injectInto(ctx as unknown as Parameters<typeof sess.injectInto>[0])
 
     if (input.storageState) {
       await ctx.addCookies(input.storageState.cookies ?? [])
-      // localStorage / IndexedDB live in the pod's user-data-dir; we don't
-      // re-seed them here. Phase 11.3 (sticky pod routing) will let same
-      // (userId, platform) hit the same pod and recover them naturally.
+      // IndexedDB / Service Worker state lives in the pod's user-data-dir and
+      // survives across grooming cycles via keepAlive + stickyKey (phase 11.5).
     }
 
     const page: Page = ctx.pages()[0] ?? (await ctx.newPage())
@@ -143,9 +147,10 @@ export const mosaiqCloudRuntime: BrowserRuntime = {
         try {
           await browser.close()
         } catch {
-          /* browser already disconnected; pod side will be cleaned up by sess.close */
+          /* browser already disconnected; pod stays alive for keepAlive sessions */
         }
-        await sess.close().catch(() => undefined)
+        // Disconnect CDP only — pod + user-data-dir persist for next grooming cycle.
+        sess.disconnect()
       },
     }
   },

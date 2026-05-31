@@ -64,3 +64,5 @@ drizzle/.snapshots
 .cache
 .turbo
 tmp/
+
+.vercel

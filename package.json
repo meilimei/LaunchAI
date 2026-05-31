@@ -27,7 +27,7 @@
     "dump:job": "dotenv -e .env.local -- tsx scripts/dump-job.ts",
     "build": "next build",
     "start": "next start",
-    "start:worker": "tsx src/worker/index.ts",
+    "start:worker": "node --import tsx src/worker/index.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:generate": "dotenv -e .env.local -- drizzle-kit generate",
@@ -77,8 +77,11 @@
     "stripe": "^17.5.0",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
+    "tsx": "^4.19.2",
     "zod": "^3.24.1",
-    "zustand": "^5.0.3"
+    "zustand": "^5.0.3",
+    "@runova/cloud-sdk": "file:./vendor/runova-cloud-sdk-0.11.0.tgz",
+    "@runova/persona-schema": "file:./vendor/runova-persona-schema-0.10.0.tgz"
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.1",
@@ -94,8 +97,13 @@
     "playwright-core": "1.59.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   },
-  "packageManager": "pnpm@9.15.0"
+  "packageManager": "pnpm@9.15.0",
+  "pnpm": {
+    "overrides": {
+      "@runova/persona-schema": "file:./vendor/runova-persona-schema-0.10.0.tgz",
+      "@runova/sdk": "file:./vendor/runova-sdk-0.10.0.tgz"
+    }
+  }
 }

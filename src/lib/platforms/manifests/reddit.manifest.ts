@@ -1,18 +1,39 @@
 /**
  * Reddit — declarative platform manifest with subreddit-aware actions.
  *
- * DEPRECATED FOR AUTONOMOUS POSTING (2026-05-02).
+ * Status: ACTIVE. Revived 2026-05-26 after the three deprecation
+ * preconditions (recorded in History below) were each addressed.
  *
- * Autonomous Reddit posting abandoned after probe brittleness (unauthenticated
- * about.json 404 under anti-scraping throttle) + Reddit's adversarial climate
- * toward AI content on new accounts. See docs/AUTOMATION_ROADMAP.md §4.
+ * History:
+ *   2026-05-02 deprecate — autonomous Reddit posting deferred after probe
+ *     brittleness (unauthenticated /user/<x>/about.json 404 under
+ *     anti-scraping throttle) + Reddit's adversarial stance toward
+ *     fresh-account AI content. dev-warmup.ts removed 'reddit' from
+ *     VALID_PLATFORMS; manifest kept as draft-only output for the
+ *     audience-mapper (PRD v1 F3) and as a reference subreddit-aware
+ *     recipe shape for future platforms.
+ *   2026-05-26 revive — three deprecation preconditions cleared:
+ *     1. probe fallback fixed: probes/reddit-profile.ts:172-222 now uses
+ *        /api/me.json with session cookies as fallback when unauthenticated
+ *        /user/<x>/about.json returns 404 under anti-scraping throttle.
+ *     2. dailyActionCap enforced in warmup-planner.ts (cap=3 means at
+ *        most 3 grooming actions in any rolling 24h window per Reddit
+ *        account). Soft block returns rate_limit + blockedUntil derived
+ *        from the oldest in-window timestamp; never persists, never
+ *        contaminates the platform-side cooldown row.
+ *     3. 'reddit' restored to dev-warmup.ts VALID_PLATFORMS.
  *
- * Code is kept (not deleted) because:
- *   - audience-mapper may still recommend Reddit for draft-only output (PRD v1 F3)
- *   - subreddit-aware model is reusable reference for future platforms
- *
- * To revive: add 'reddit' back to VALID_PLATFORMS in dev-warmup.ts, fix the
- * probe fallback, and enforce dailyActionCap in the planner.
+ * Long-running stability across CDP sessions (IndexedDB / Service Worker
+ * persistence) depends on Mosaiq Phase 11.5 `keepAlive: true` + sticky pod
+ * routing. Without sticky pods every createSession lands on a fresh microVM
+ * and the pod's --user-data-dir (where IndexedDB / Service Worker state
+ * lives) is destroyed on close. Reddit auth cookies replay from LaunchAI's
+ * storageState so `engage` / `post` / `comment` work today, but PWA / SW
+ * state from new.reddit.com does not survive across cycles — a soft
+ * anti-bot signal since real accounts accumulate weeks of SW state. The
+ * full spec for what LaunchAI needs from Mosaiq is in
+ * `docs/MOSAIQ-INTEGRATION-REQUESTS.md` Request 1; Mosaiq's own Phase 11.5
+ * doc had not been drafted as of this revive.
  *
  * ---
  *

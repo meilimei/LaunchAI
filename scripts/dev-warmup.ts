@@ -9,13 +9,10 @@
  * scripts/fixtures/warmup-context.json). In the supervisor this would come
  * from the campaign row.
  *
- * Output:
- *   - Current AccountState
- *   - Derived stage
- *   - Next planned actions (priority order, with reasons)
- *   - If --execute: dispatches the top action via the platform adapter,
- *     prints the result + trajectory, and shows what the next plan looks
- *     like after the new state is persisted.
+ * This is now a THIN CLI WRAPPER over `runOneTick` (src/lib/warmup/run-one-tick.ts)
+ * — the same function the Inngest scheduler / Fly worker call. It only adds
+ * argument parsing, env-driven headful default, console rendering, and the
+ * tmp/ trajectory dump. All planning + execution logic lives in runOneTick.
  *
  * No DB writes happen for the action history table — this is the same
  * smoke-test layer as dev:run-action. The grooming side-effects on
@@ -24,10 +21,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ensureDevUser } from '@/lib/dev-user'
-import { loadAccountState, deriveStage, isInCooldown } from '@/lib/browser/account-state'
-import { getPlatformAdapter } from '@/lib/platforms/registry'
-import { planWarmup, type WarmupContext } from '@/lib/platforms/warmup-planner'
-import type { ActionRequest, PlatformId } from '@/lib/platforms/types'
+import { runOneTick, type TickTrajectory } from '@/lib/warmup/run-one-tick'
+import type { WarmupContext, WarmupPlan } from '@/lib/platforms/warmup-planner'
+import type { PlatformId } from '@/lib/platforms/types'
 
 // Show the browser by default — the agent operates a real account here.
 if (process.env.BROWSER_HEADFUL === undefined) {
@@ -36,7 +32,7 @@ if (process.env.BROWSER_HEADFUL === undefined) {
 
 const VALID_PLATFORMS: PlatformId[] = [
   'x',
-  // 'reddit', // Deprecated for autonomous posting 2026-05-02. See reddit.manifest.ts.
+  'reddit', // Revived 2026-05-26. See reddit.manifest.ts header history.
   'product_hunt',
   'hacker_news',
   'indie_hackers',
@@ -83,18 +79,53 @@ function loadContext(p: string): WarmupContext {
   return JSON.parse(raw) as WarmupContext
 }
 
+/** Render an empty-step plan the same way the old inline logic did. */
+function printNoSteps(plan: WarmupPlan): void {
+  if (plan.blockedUntil && plan.blockedReason === 'rate_limit') {
+    // dailyActionCap soft block — purely client-side, never persisted.
+    console.log(
+      `Daily action cap reached. Earliest next slot: ${plan.blockedUntil.toISOString()}.`,
+    )
+    console.log(
+      '  Cap is enforced by warmup-planner.ts against the platform manifest\'s\n' +
+        '  capabilities.dailyActionCap. No state change needed — wait it out\n' +
+        '  or trim warmup.recentActionTimestamps in the dev DB to clear early.',
+    )
+  } else if (plan.blockedUntil) {
+    console.log(
+      `Plan blocked until ${plan.blockedUntil.toISOString()} ` +
+        `(reason=${plan.blockedReason ?? 'unknown'}).`,
+    )
+  } else {
+    console.log('No grooming steps needed — account is posting_ready.')
+    console.log('Next: enqueue an actual content action (post / comment).')
+  }
+}
+
 async function main() {
   const { platform, contextPath, execute } = parseArgs()
   const userId = await ensureDevUser()
-  const ctx = loadContext(contextPath)
+  const context = loadContext(contextPath)
 
   console.log(`[dev-warmup] platform=${platform} userId=${userId}`)
   console.log(`[dev-warmup] context=${contextPath}`)
 
-  const state = await loadAccountState(userId, platform)
-  const stage = deriveStage(state)
+  // CLI-only trajectory sink: dump the full execution result to tmp/.
+  let trajectoryFile: string | undefined
+  const onTrajectory = (record: TickTrajectory) => {
+    const dir = path.resolve(process.cwd(), 'tmp')
+    fs.mkdirSync(dir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    trajectoryFile = path.join(dir, `dev-warmup-${stamp}.json`)
+    fs.writeFileSync(trajectoryFile, JSON.stringify(record.result, null, 2), 'utf8')
+  }
+
+  const tick = await runOneTick({ userId, platform, context, execute, onTrajectory })
+
+  // ── current account state ──────────────────────────────────────────────
+  const state = tick.state
   console.log(`\n=== current account state ===`)
-  console.log(`stage:        ${stage}`)
+  console.log(`stage:        ${tick.stage}`)
   console.log(`profile:      ${JSON.stringify(state?.profile ?? {})}`)
   console.log(`warmup:       ${JSON.stringify(state?.warmup ?? {})}`)
   if (state?.cooldownUntil) {
@@ -102,19 +133,17 @@ async function main() {
     if (state.cooldownEvidence) console.log(`evidence:     ${state.cooldownEvidence}`)
   }
 
-  if (isInCooldown(state)) {
-    console.log(
-      `\n[dev-warmup] account is in cooldown — refusing to plan or execute.`,
-    )
+  if (tick.outcome === 'cooldown') {
+    console.log(`\n[dev-warmup] account is in cooldown — refusing to plan or execute.`)
     process.exit(0)
   }
 
-  const plan = planWarmup(platform, state, ctx)
+  // ── plan ────────────────────────────────────────────────────────────────
+  const plan = tick.plan
   console.log(`\n=== plan ===`)
   console.log(`derived stage: ${plan.stage}`)
   if (plan.steps.length === 0) {
-    console.log('No grooming steps needed — account is posting_ready.')
-    console.log('Next: enqueue an actual content action (post / comment).')
+    printNoSteps(plan)
     process.exit(0)
   }
   for (const [i, step] of plan.steps.entries()) {
@@ -131,20 +160,17 @@ async function main() {
     process.exit(0)
   }
 
-  // Execute step 1 only — re-plan after each action.
-  const top = plan.steps[0]!
-  console.log(`\n[dev-warmup] executing step 1: ${top.action.type}`)
-  const adapter = getPlatformAdapter(platform)
-  const action: ActionRequest = { ...top.action, userId }
+  // ── execution ─────────────────────────────────────────────────────────--
+  const executed = tick.executed!
+  console.log(`\n[dev-warmup] executing step 1: ${executed.action.type}`)
 
-  const validation = await adapter.validateAction(action)
-  if (!validation.ok) {
-    console.error(`[dev-warmup] validation FAILED: ${validation.recommendation}`)
-    for (const r of validation.reasons) console.error(`  - ${r}`)
+  if (tick.outcome === 'validation_failed') {
+    console.error(`[dev-warmup] validation FAILED: ${executed.validation.recommendation}`)
+    for (const r of executed.validation.reasons) console.error(`  - ${r}`)
     process.exit(2)
   }
 
-  const result = await adapter.executeAction(action)
+  const result = executed.result!
   console.log(`\n=== result ===`)
   console.log(`status:        ${result.status}`)
   if (result.error) console.log(`error:         ${result.error}`)
@@ -161,23 +187,17 @@ async function main() {
     console.log(`steps:         ${raw.trajectorySteps}`)
   }
   if (raw?.costUsd !== undefined) console.log(`costUsd:       ${raw.costUsd.toFixed(5)}`)
+  if (trajectoryFile) console.log(`trajectory:    ${trajectoryFile}`)
 
-  if (raw?.trajectory) {
-    const dir = path.resolve(process.cwd(), 'tmp')
-    fs.mkdirSync(dir, { recursive: true })
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const file = path.join(dir, `dev-warmup-${stamp}.json`)
-    fs.writeFileSync(file, JSON.stringify(result, null, 2), 'utf8')
-    console.log(`trajectory:    ${file}`)
-  }
-
-  // Show what the planner thinks next, post-execution.
-  const nextState = await loadAccountState(userId, platform)
-  const nextPlan = planWarmup(platform, nextState, ctx)
+  // ── next plan (after this step) ──────────────────────────────────────────
+  const nextPlan = tick.nextPlan!
   console.log(`\n=== next plan (after this step) ===`)
   console.log(`derived stage: ${nextPlan.stage}`)
-  if (nextPlan.blockedUntil) {
-    // Cooldown short-circuit — empty steps mean "wait", not "advance".
+  if (nextPlan.blockedUntil && nextPlan.blockedReason === 'rate_limit') {
+    console.log(
+      `Daily action cap reached. Earliest next slot: ${nextPlan.blockedUntil.toISOString()}.`,
+    )
+  } else if (nextPlan.blockedUntil) {
     console.log(
       `Account is blocked until ${nextPlan.blockedUntil.toISOString()} ` +
         `(reason=${nextPlan.blockedReason ?? 'unknown'}). ` +
@@ -188,9 +208,7 @@ async function main() {
     console.log('Next: enqueue an actual content action (post / comment).')
   } else {
     for (const [i, step] of nextPlan.steps.slice(0, 3).entries()) {
-      console.log(
-        `  [${i + 1}] ${step.action.type.padEnd(12)}  ${step.reason}`,
-      )
+      console.log(`  [${i + 1}] ${step.action.type.padEnd(12)}  ${step.reason}`)
     }
   }
 

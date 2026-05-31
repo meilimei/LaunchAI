@@ -227,15 +227,23 @@ export async function recordSubredditRules(
 /**
  * Derive the lifecycle stage from raw state. Pure function.
  *
+ * Cooldown is purely time-based via `isInCooldown` — `cooldownReason` is
+ * diagnostic only and does NOT extend the pause past `cooldownUntil`. This
+ * matches `recordCooldown`'s contract (cooldownUntil is required) and keeps
+ * deriveStage consistent with planWarmup's cooldown short-circuit, which
+ * also only checks the timestamp. If a reason needs to be sticky (rare —
+ * e.g. an admin-only `manual_review`), callers should set `cooldownUntil`
+ * to a far-future timestamp rather than rely on the reason field.
+ *
+ * Stage mirror in `warmup-planner.ts:deriveStageFromState` — keep both in
+ * sync; they share thresholds (MIN_FOLLOWS=10, MIN_UPVOTES=15).
+ *
  * See docs/ACCOUNT_GROOMING.md §1 for the model.
  */
 export function deriveStage(
   state: AccountState | null | undefined,
 ): NonNullable<AccountState['stage']> {
   if (!state) return 'fresh'
-  if (state.cooldownReason === 'verify_email' || state.cooldownReason === 'manual_review') {
-    return 'paused'
-  }
   if (isInCooldown(state)) return 'paused'
 
   const profileComplete =

@@ -1,0 +1,39 @@
+# Fly.io app for the LaunchAI background worker.
+#
+# This is a BACKGROUND WORKER, not a web service: there is no [http_service]
+# and no [[services]] block, so Fly does not expect an open port. The machine
+# simply runs `pnpm start:worker` and stays up to drain the BullMQ queue.
+#
+# Deploy:  flyctl deploy -c fly.toml --remote-only --depot=false
+#          (Depot builder queue can hang for 10+ min from CN; --depot=false uses Fly's native remote builder.)
+# Secrets: flyctl secrets set DATABASE_URL=... REDIS_URL=... DEEPSEEK_API_KEY=...
+#          (see docs/CLOUD-DEPLOYMENT.md for the full list)
+#
+# Region note: the worker chats heavily with Supabase (ap-southeast-2 / Sydney),
+# so `syd` minimizes DB latency. If browser-action latency to Mosaiq Cloud
+# (currently iad) dominates, colocate this worker with Mosaiq instead.
+app = "launchai-worker"
+primary_region = "syd"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  # Browser sessions are driven through Mosaiq Cloud, not a local Chromium.
+  BROWSER_RUNTIME = "mosaiq"
+  MOSAIQ_API_URL = "https://mosaiq-cloud-runtime.fly.dev"
+  MOSAIQ_PROJECT_ID = "proj_launchai"
+  MOSAIQ_DEFAULT_PERSONA_ID = "win11-chrome-us-default"
+  # Fly pool cold acquire is often 45–60s; cloud-sdk default is 15s.
+  MOSAIQ_REQUEST_TIMEOUT_MS = "180000"
+
+# Single always-on worker process. Keep it running (do not scale to zero) so
+# queued jobs are picked up promptly.
+[processes]
+  worker = "pnpm start:worker"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  processes = ["worker"]

@@ -2,29 +2,20 @@
  * Mosaiq Cloud runtime smoke test.
  *
  * Verifies the BROWSER_RUNTIME=mosaiq path end-to-end, bypassing the full
- * Next.js / Clerk / queue stack. Talks straight to:
- *
- *   getBrowserRuntime() → mosaiqCloudRuntime
- *     → MosaiqCloudClient.createSession()
- *     → cloud-runtime REST (POST /v1/sessions)
- *     → cloud-runtime WS upgrade proxy (chromium.connectOverCDP)
- *     → browser-pod (spawned chromium with persona launch flags)
- *     → session.injectInto(ctx) (persona JS-level addInitScript)
- *
- * Then asserts:
- *   - runtime tag is 'mosaiq'
- *   - navigator.* surface in the live page reflects the persona, not raw chromium
- *   - saveStorageState() returns a cookies array
- *   - close() releases the pod (caller must verify pool.busy == 0 separately)
+ * Next.js / Clerk / queue stack. Runs TWO grooming cycles to prove phase 11.5
+ * keepAlive + sticky rejoin: cycle-1 cold start, disconnect (pod stays alive),
+ * cycle-2 rejoin same stickyKey without cold pod spawn.
  *
  * Run:
  *   pnpm dev:mosaiq-smoke
  *
  * Pre-reqs:
- *   - Mosaiq pod running on POD_ADDRS (default http://127.0.0.1:9222)
  *   - cloud-runtime running on MOSAIQ_API_URL (default http://127.0.0.1:8787)
- *   - .env.local has MOSAIQ_API_KEY / MOSAIQ_PROJECT_ID / MOSAIQ_DEFAULT_PERSONA_ID set
+ *   - .env.local has MOSAIQ_API_KEY / MOSAIQ_PROJECT_ID / MOSAIQ_DEFAULT_PERSONA_ID
+ *   - BROWSER_RUNTIME=mosaiq
  */
+import { MosaiqCloudClient } from '@runova/cloud-sdk'
+
 import { getBrowserRuntime } from '@/lib/browser/runtime'
 
 interface NavigatorObservation {
@@ -41,43 +32,19 @@ interface NavigatorObservation {
   intlTimezone: string
 }
 
+const SMOKE_USER = 'mosaiq-smoke-user'
+const SMOKE_PLATFORM = 'reddit'
+
 function check(label: string, ok: boolean, detail: string): void {
   const sym = ok ? '✅' : '❌'
   console.log(`  ${sym} ${label}${detail ? `  (${detail})` : ''}`)
   if (!ok) process.exitCode = 1
 }
 
-async function main() {
-  const t0 = Date.now()
-  const ts = (msg: string) => console.log(`[+${String(Date.now() - t0).padStart(5)}ms] ${msg}`)
-
-  ts(`BROWSER_RUNTIME=${process.env.BROWSER_RUNTIME ?? '(unset, default local)'}`)
-  ts(`MOSAIQ_API_URL=${process.env.MOSAIQ_API_URL ?? '(unset)'}`)
-  ts(`MOSAIQ_PROJECT_ID=${process.env.MOSAIQ_PROJECT_ID ?? '(unset)'}`)
-  ts(`MOSAIQ_DEFAULT_PERSONA_ID=${process.env.MOSAIQ_DEFAULT_PERSONA_ID ?? '(unset)'}`)
-
-  const runtime = getBrowserRuntime()
-  ts(`runtime.kind = ${runtime.kind}`)
-  if (runtime.kind !== 'mosaiq') {
-    console.error(
-      `\n❌ Expected runtime.kind === 'mosaiq', got '${runtime.kind}'.\n` +
-        `   Set BROWSER_RUNTIME=mosaiq in .env.local before running this script.`,
-    )
-    process.exit(2)
-  }
-
-  ts('startSession({ userId: mosaiq-smoke, platform: reddit, startUrl: about:blank })')
-  const session = await runtime.startSession({
-    userId: 'mosaiq-smoke-user',
-    platform: 'reddit',
-    startUrl: 'about:blank',
-  })
-  ts(`session.id = ${session.id}  runtime = ${session.runtime}`)
-  check("session.runtime === 'mosaiq'", session.runtime === 'mosaiq', `got ${session.runtime}`)
-  check('session.id starts with mosaiq_', session.id.startsWith('mosaiq_'), session.id)
-
-  ts('navigator/* observation in live page')
-  const observed = (await session.page.evaluate(() => {
+async function observeNavigator(page: {
+  evaluate: <T>(fn: () => T) => Promise<T>
+}): Promise<NavigatorObservation> {
+  return page.evaluate(() => {
     const nav = navigator as Navigator & { deviceMemory?: number }
     return {
       userAgent: nav.userAgent,
@@ -92,10 +59,10 @@ async function main() {
       devicePixelRatio: window.devicePixelRatio,
       intlTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     }
-  })) as NavigatorObservation
-  console.log(observed)
+  }) as Promise<NavigatorObservation>
+}
 
-  // win11-chrome-us persona expected surface (matches Mosaiq e2e-smoke.mjs assertions)
+function assertPersonaSurface(observed: NavigatorObservation): void {
   check('navigator.platform == "Win32"', observed.platform === 'Win32', observed.platform)
   check(
     'navigator.languages == ["en-US","en"]',
@@ -140,20 +107,90 @@ async function main() {
     observed.userAgent.includes('Chrome/130.'),
     observed.userAgent,
   )
+}
 
-  ts('saveStorageState()')
+async function runCycle(
+  cycle: 1 | 2,
+  t0: number,
+  ts: (msg: string) => void,
+): Promise<{ connectMs: number }> {
+  const runtime = getBrowserRuntime()
+  const tConnect = Date.now()
+  ts(`[cycle ${cycle}] startSession({ userId: ${SMOKE_USER}, platform: ${SMOKE_PLATFORM} })`)
+  const session = await runtime.startSession({
+    userId: SMOKE_USER,
+    platform: SMOKE_PLATFORM,
+    startUrl: 'about:blank',
+  })
+  const connectMs = Date.now() - tConnect
+  ts(`[cycle ${cycle}] session.id = ${session.id}  connectMs = ${connectMs}`)
+  check("session.runtime === 'mosaiq'", session.runtime === 'mosaiq', `got ${session.runtime}`)
+  check('session.id starts with mosaiq_', session.id.startsWith('mosaiq_'), session.id)
+
+  const observed = await observeNavigator(session.page)
+  console.log(observed)
+  assertPersonaSurface(observed)
+
   const state = await session.saveStorageState()
-  ts(`state.cookies.length = ${state.cookies?.length ?? 0}`)
   check('state.cookies is array', Array.isArray(state.cookies), `got ${typeof state.cookies}`)
 
-  ts('session.close()')
+  ts(`[cycle ${cycle}] session.close() (keepAlive disconnect — pod stays alive)`)
   await session.close()
-  ts('done')
+  ts(`[cycle ${cycle}] done (+${Date.now() - t0}ms total)`)
+  return { connectMs }
+}
+
+async function main() {
+  const t0 = Date.now()
+  const ts = (msg: string) => console.log(`[+${String(Date.now() - t0).padStart(5)}ms] ${msg}`)
+
+  ts(`BROWSER_RUNTIME=${process.env.BROWSER_RUNTIME ?? '(unset, default local)'}`)
+  ts(`MOSAIQ_API_URL=${process.env.MOSAIQ_API_URL ?? '(unset)'}`)
+  ts(`MOSAIQ_PROJECT_ID=${process.env.MOSAIQ_PROJECT_ID ?? '(unset)'}`)
+  ts(`MOSAIQ_DEFAULT_PERSONA_ID=${process.env.MOSAIQ_DEFAULT_PERSONA_ID ?? '(unset)'}`)
+
+  const runtime = getBrowserRuntime()
+  if (runtime.kind !== 'mosaiq') {
+    console.error(
+      `\n❌ Expected runtime.kind === 'mosaiq', got '${runtime.kind}'.\n` +
+        `   Set BROWSER_RUNTIME=mosaiq in .env.local before running this script.`,
+    )
+    process.exit(2)
+  }
+
+  const client = new MosaiqCloudClient({
+    apiUrl: process.env.MOSAIQ_API_URL ?? 'http://127.0.0.1:8787',
+    apiKey: process.env.MOSAIQ_API_KEY!,
+    projectId: process.env.MOSAIQ_PROJECT_ID ?? 'proj_launchai',
+  })
+
+  const cycle1 = await runCycle(1, t0, ts)
+
+  // After cycle-1 disconnect, keepAlive session should still be live on control plane.
+  const liveAfterCycle1 = await client.listSessions({ status: 'live' })
+  ts(`live sessions after cycle-1: ${liveAfterCycle1.length}`)
+  check(
+    'keepAlive session still live after disconnect',
+    liveAfterCycle1.length >= 1,
+    `count=${liveAfterCycle1.length}`,
+  )
+
+  const cycle2 = await runCycle(2, t0, ts)
+
+  // Rejoin should be materially faster than cold start (no new pod acquire).
+  // Local docker cold start is often 15-40s; rejoin is typically <10s.
+  check(
+    'cycle-2 connect faster than cycle-1 (sticky rejoin)',
+    cycle2.connectMs < cycle1.connectMs,
+    `cycle1=${cycle1.connectMs}ms cycle2=${cycle2.connectMs}ms`,
+  )
 
   if (process.exitCode === 1) {
     console.log('\n❌ SOME CHECKS FAILED')
   } else {
-    console.log(`\n🎉 LaunchAI ↔ Mosaiq Cloud smoke PASSED in ${(Date.now() - t0) / 1000}s`)
+    console.log(
+      `\n🎉 LaunchAI ↔ Mosaiq Cloud smoke PASSED (2 cycles, rejoin) in ${(Date.now() - t0) / 1000}s`,
+    )
   }
 }
 

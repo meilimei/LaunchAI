@@ -1,0 +1,16 @@
+# Keep the build context small and free of secrets / local-only artifacts.
+node_modules
+.next
+.git
+.gitignore
+.env
+.env.*
+tmp
+.browser-profiles
+drizzle
+*.log
+dist
+.turbo
+README.md
+docs
+*.png
